@@ -307,6 +307,37 @@ ULONG amiga_detect_ram(void *start, void *end, ULONG step)
     return p - pbyte_start;
 }
 
+/* See Amiga memory map there:
+ * https://www.amigacoding.com/index.php/Amiga_memory_map */
+
+/* Detect Slow RAM, a.k.a A500 trapdoor RAM, a.k.a pseudo-fast RAM.
+ * Max = 1.5 MB (standard)
+ *   or 1.75 MB (requires Gary adapter, incompatible with Gayle IDE). */
+static void add_slow_ram(void)
+{
+    UBYTE *start = (UBYTE *)0x00c00000;
+    UBYTE *end;
+    ULONG size;
+
+    if (has_gayle)
+    {
+        /* Slow RAM area is supposed to stop here */
+        end = (UBYTE *)0x00d80000;
+    }
+    else
+    {
+        /* But if there is no Gayle IDE, Slow RAM may extend farther */
+        end = (UBYTE *)0x00dc0000;
+    }
+
+    size = amiga_detect_ram(start, end, 256*1024UL);
+    if (size == 0)
+        return;
+
+    KDEBUG(("Slow RAM detected at %p, size=%lu\n", start, size));
+    xmaddalt(start, size);
+}
+
 void amiga_add_alt_ram(void)
 {
 #if EMUTOS_LIVES_IN_RAM
@@ -320,9 +351,13 @@ void amiga_add_alt_ram(void)
         KDEBUG(("xmaddalt(%p, %lu)\n", address, size));
         xmaddalt(address, size);
     }
-#elif CONF_WITH_AROS
+#else
+    /* Add the slowest RAM first to put it at the end of the Alt-RAM pool */
+    add_slow_ram();
+#if CONF_WITH_AROS
     aros_add_alt_ram();
 #endif
+#endif /* EMUTOS_LIVES_IN_RAM */
 }
 
 #endif /* CONF_WITH_ALT_RAM */
