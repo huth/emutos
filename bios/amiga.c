@@ -451,8 +451,11 @@ static void add_motherboard_fast_ram(void)
     xmaddalt(end - size, size);
 }
 
-/* AUTOCONFIG is implemented lower */
+/* Forward declarations */
 static void add_expansion_ram(void);
+#if CONF_WITH_UAE
+static void add_uae_32bit_chip_ram(void);
+#endif
 
 void amiga_add_alt_ram(void)
 {
@@ -477,6 +480,9 @@ void amiga_add_alt_ram(void)
     aros_add_alt_ram();
 #else
     add_expansion_ram();
+#endif
+#if CONF_WITH_UAE
+    add_uae_32bit_chip_ram();
 #endif
 #endif /* EMUTOS_LIVES_IN_RAM */
 }
@@ -1203,6 +1209,35 @@ static PFLONG uae_find_trap(UWORD offset)
         return NULL;
 }
 
+/* Pointer to UAE trap "getchipmemsize" */
+static PFLONG uae_trap_getchipmemsize;
+
+/* Get information about Chip and 32-bit Chip RAM.
+ * Implementation is in UAE autoconf.cpp, function getchipmemsize().
+ * https://github.com/tonioni/WinUAE/blob/master/autoconf.cpp */
+static ULONG uae_getchipmemsize(void **pz3chipmem_start, ULONG *pz3chipmem_size)
+{
+    register ULONG chipmem_size __asm__("d0");
+    register ULONG z3chipmem_size __asm__("d1");
+    register void *z3chipmem_start __asm__("a1");
+
+    /* Call uae_trap_getchipmemsize() */
+    __asm__ volatile
+    (
+        "jsr     (%3)"
+    : "=r"(chipmem_size), "=r"(z3chipmem_size), "=r"(z3chipmem_start) /* outputs */
+    : "a"(uae_trap_getchipmemsize) /* inputs */
+    : /* clobbered */
+    );
+
+    *pz3chipmem_start = z3chipmem_start;
+    *pz3chipmem_size = z3chipmem_size;
+    return chipmem_size;
+}
+
+/* Find UAE traps for calling emulator native functions.
+ * They are installed in UAE autoconf.cpp, function rtarea_init().
+ * https://github.com/tonioni/WinUAE/blob/master/autoconf.cpp */
 void amiga_uaelib_init(void)
 {
     MAYBE_UNUSED(uaelib_GetVersion);
@@ -1217,6 +1252,21 @@ void amiga_uaelib_init(void)
             (int)((version & 0xff000000) >> 24),
             (int)((version & 0x00ff0000) >> 16),
             (int)(version & 0x0000ffff)));
+    }
+#endif
+
+    /* Find UAE trap "getchipmemsize" */
+    uae_trap_getchipmemsize = uae_find_trap(0xff80);
+#ifdef ENABLE_KDEBUG
+    if (uae_trap_getchipmemsize)
+    {
+        ULONG chipmem_size;
+        void *z3chipmem_start;
+        ULONG z3chipmem_size;
+
+        chipmem_size = uae_getchipmemsize(&z3chipmem_start, &z3chipmem_size);
+        KDEBUG(("uae_getchipmemsize(): chipmem_size=%lu z3chipmem_start=%p z3chipmem_size=%lu\n",
+            chipmem_size, z3chipmem_start, z3chipmem_size));
     }
 #endif
 }
@@ -1270,6 +1320,25 @@ void kprintf_outc_uae(int c)
             *p = '\0';
         }
     }
+}
+
+/******************************************************************************/
+/* UAE 32-bit Chip RAM (a.k.a MegaChipRAM)                                    */
+/* Note that such RAM doesn't exist on real hardware.                         */
+/******************************************************************************/
+
+static void add_uae_32bit_chip_ram(void)
+{
+    void *z3chipmem_start;
+    ULONG z3chipmem_size;
+
+    if (!uae_trap_getchipmemsize)
+        return;
+
+    uae_getchipmemsize(&z3chipmem_start, &z3chipmem_size);
+
+    KDEBUG(("UAE 32-bit Chip RAM detected at %p, size=%lu\n", z3chipmem_start, z3chipmem_size));
+    xmaddalt(z3chipmem_start, z3chipmem_size);
 }
 
 #endif /* CONF_WITH_UAE */
